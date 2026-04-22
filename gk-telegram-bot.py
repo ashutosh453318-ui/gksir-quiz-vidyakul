@@ -42,6 +42,7 @@ SUBJECTS_FILES = {
 
 ACTIVE_POLLS = {}
 QUIZ_TASKS = {} # Job queue ki jagah apna custom task manager
+COMPETITION_STATS = {} # Competition ke dauran kitne question puche gaye, uska tracker
 
 # --- DUMMY WEB SERVER FOR RENDER ---
 class DummyHandler(BaseHTTPRequestHandler):
@@ -78,10 +79,15 @@ def init_db():
             PRIMARY KEY (chat_id, user_id)
         )
     """)
-    try:
-        cursor.execute("ALTER TABLE scores ADD COLUMN last_time REAL DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
+    # Naye columns add karne ki koshish (Correct/Wrong tracking ke liye)
+    try: cursor.execute("ALTER TABLE scores ADD COLUMN last_time REAL DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    
+    try: cursor.execute("ALTER TABLE scores ADD COLUMN correct_answers INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    
+    try: cursor.execute("ALTER TABLE scores ADD COLUMN wrong_answers INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS quiz_state (
@@ -122,37 +128,69 @@ def reset_scores(chat_id):
     conn.commit()
     conn.close()
 
-def add_points(chat_id, user_id, full_name, points_to_add):
+def record_answer(chat_id, user_id, full_name, is_correct):
+    """User ka answer record karta hai aur duplicate entry rokta hai"""
     conn = sqlite3.connect("quiz_scores.db")
     cursor = conn.cursor()
     current_time = time.time()
     
-    cursor.execute("SELECT points FROM scores WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+    cursor.execute("SELECT points, correct_answers, wrong_answers FROM scores WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
     data = cursor.fetchone()
+    
+    points_to_add = 2 if is_correct else 0
+    corr_add = 1 if is_correct else 0
+    wrong_add = 0 if is_correct else 1
+    
     if data:
-        new_points = data[0] + points_to_add
-        cursor.execute("UPDATE scores SET points = ?, full_name = ?, last_time = ? WHERE chat_id = ? AND user_id = ?", 
-                       (new_points, full_name, current_time, chat_id, user_id))
+        new_points = (data[0] or 0) + points_to_add
+        new_corr = (data[1] or 0) + corr_add
+        new_wrong = (data[2] or 0) + wrong_add
+        cursor.execute("""
+            UPDATE scores 
+            SET points = ?, correct_answers = ?, wrong_answers = ?, full_name = ?, last_time = ? 
+            WHERE chat_id = ? AND user_id = ?
+        """, (new_points, new_corr, new_wrong, full_name, current_time, chat_id, user_id))
     else:
-        cursor.execute("INSERT INTO scores (chat_id, user_id, full_name, points, last_time) VALUES (?, ?, ?, ?, ?)", 
-                       (chat_id, user_id, full_name, points_to_add, current_time))
+        cursor.execute("""
+            INSERT INTO scores (chat_id, user_id, full_name, points, correct_answers, wrong_answers, last_time) 
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (chat_id, user_id, full_name, points_to_add, corr_add, wrong_add, current_time))
     conn.commit()
     conn.close()
 
 def get_top_scorers(chat_id):
     conn = sqlite3.connect("quiz_scores.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT full_name, points FROM scores WHERE chat_id = ? ORDER BY points DESC, last_time ASC LIMIT 10", (chat_id,))
+    cursor.execute("SELECT full_name, points, correct_answers, wrong_answers FROM scores WHERE chat_id = ? ORDER BY points DESC, last_time ASC LIMIT 10", (chat_id,))
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+# --- LEADERBOARD FORMATTER ---
+def generate_leaderboard_msg(chat_id, reason="COMPETITION OVER"):
+    top_users = get_top_scorers(chat_id)
+    total_asked = COMPETITION_STATS.get(chat_id, {}).get('total_asked', 0)
+    
+    msg = f"🏁 {reason} 🏁\n\n📊 Total Asked: {total_asked} Questions\n\n🏅 Final Leaderboard:\n"
+    if top_users:
+        for idx, row in enumerate(top_users, 1):
+            name = row[0]
+            points = row[1] or 0
+            correct = row[2] or 0
+            wrong = row[3] or 0
+            skipped = total_asked - (correct + wrong)
+            if skipped < 0: skipped = 0 # Safety check
+            
+            msg += f"<b>{idx}. {name}</b>\n   🎯 {points} Pts | ✅ Sahi: {correct} | ❌ Galat: {wrong} | ⏭️ Skipped: {skipped}\n\n"
+    else:
+        msg += "Kisi ne point nahi banaya ya participate nahi kiya."
+    return msg
 
 # --- FILE SETUP & READING ---
 def create_dummy_files_if_not_exist():
     for subject, file_name in SUBJECTS_FILES.items():
         if not os.path.exists(file_name):
             with open(file_name, "w", encoding="utf-8") as f:
-                # Format: Question | Option 1 | Option 2 | Option 3 | Option 4 | Correct Option Index (1-4)
                 f.write(f"Sample {subject.capitalize()} Question? | Option A | Option B | Option C | Option D | 1\n")
             logger.info(f"Created sample file: {file_name}")
 
@@ -172,7 +210,6 @@ def load_questions(subject):
                     options = [p.strip() for p in parts[1:5]]
                     try:
                         correct_idx = int(parts[5].strip()) - 1
-                        # Telegram requires exactly 2-10 options
                         if len(options) >= 2:
                             questions.append({
                                 "q": q_text,
@@ -232,14 +269,8 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
         return False
 
     if current_idx >= len(questions):
-        top_users = get_top_scorers(chat_id)
-        msg = "🏁 ALL QUESTIONS COMPLETED! 🏁\n\n🏅 Final Leaderboard:\n"
-        if top_users:
-            for idx, (name, points) in enumerate(top_users, 1):
-                msg += f"{idx}. {name} -> {points} Marks\n"
-        else:
-            msg += "Kisi ne sahi jawab nahi diya."
-        await context.bot.send_message(chat_id, msg)
+        msg = generate_leaderboard_msg(chat_id, "ALL QUESTIONS COMPLETED")
+        await context.bot.send_message(chat_id, msg, parse_mode="HTML")
         return False
     
     question_data = questions[current_idx]
@@ -260,12 +291,17 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
         )
         ACTIVE_POLLS[message.poll.id] = {'correct': question_data['correct'], 'chat_id': chat_id}
         update_quiz_state(chat_id, current_idx + 1, subject)
+        
+        # Total Asked Questions increment karo is session ke liye
+        if chat_id not in COMPETITION_STATS:
+            COMPETITION_STATS[chat_id] = {'total_asked': 0}
+        COMPETITION_STATS[chat_id]['total_asked'] += 1
+        
         return True
         
     except Exception as e:
         logger.error(f"Quiz Error in Chat {chat_id}: {e}")
         await context.bot.send_message(chat_id, f"⚠️ Question bhejne mein dikkat aayi (Error: {e}). \nPoll option 100 character se chota hona chahiye.")
-        # Skip this invalid question automatically so it doesn't get stuck
         update_quiz_state(chat_id, current_idx + 1, subject) 
         return True 
 
@@ -292,15 +328,8 @@ async def stop_competition_auto(context: ContextTypes.DEFAULT_TYPE, chat_id: int
     if chat_id in QUIZ_TASKS:
         del QUIZ_TASKS[chat_id]
     
-    top_users = get_top_scorers(chat_id)
-    msg = "🏁 COMPETITION OVER! (Time Up or Completed) 🏁\n\n🏅 Final Leaderboard:\n"
-    if top_users:
-        for idx, (name, points) in enumerate(top_users, 1):
-            msg += f"{idx}. {name} -> {points} Marks\n"
-    else:
-        msg += "Koi leaderboard data nahi."
-    await context.bot.send_message(chat_id, msg)
-
+    msg = generate_leaderboard_msg(chat_id, "COMPETITION OVER (Time Up)")
+    await context.bot.send_message(chat_id, msg, parse_mode="HTML")
 
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = update.poll_answer
@@ -314,8 +343,8 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         correct_option = poll_info['correct']
         chat_id = poll_info['chat_id']
         
-        if selected_option == correct_option:
-            add_points(chat_id, user_id, user_name, 2)
+        is_correct = (selected_option == correct_option)
+        record_answer(chat_id, user_id, user_name, is_correct)
 
 # --- COMMANDS ---
 async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -383,6 +412,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_idx, _ = get_quiz_state(chat_id)
         update_quiz_state(chat_id, current_idx, subject)
         
+        # Competition naye sire se shuru, Stats Zero kardo
+        COMPETITION_STATS[chat_id] = {'total_asked': 0}
+        
         await query.edit_message_text(f"🚀 {subject.capitalize()} COMPETITION START! 🚀\n⏱️ Duration: 10 Minutes\n⚡ Har 10 Second me Naya Sawal\n\nTaiyar ho jao! 🏁")
         
         if chat_id in QUIZ_TASKS:
@@ -412,13 +444,8 @@ async def stop_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     QUIZ_TASKS[chat_id].cancel()
     del QUIZ_TASKS[chat_id]
     
-    top_users = get_top_scorers(chat_id)
-    msg = "🛑 Competition manually rok diya gaya.\n\n🏅 Current Leaderboard:\n"
-    if top_users:
-        for idx, (name, points) in enumerate(top_users, 1): msg += f"{idx}. {name} -> {points} Marks\n"
-    else:
-        msg += "Kisi ne point nahi banaya."
-    await update.message.reply_text(msg)
+    msg = generate_leaderboard_msg(chat_id, "COMPETITION MANUALLY STOPPED")
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 async def setup_commands(application: Application):
     try:
