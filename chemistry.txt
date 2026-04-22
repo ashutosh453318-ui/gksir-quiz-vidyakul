@@ -1,0 +1,30 @@
+Which one of the following is not a colligative properties? | Osmotic pressure | Vapour pressure | Elevation of boiling point | Depression of Freezing point | 2
+The relative lowering of vapour pressure of a solution of 6 g of urea in 90 g of water is equal to | 0.02 | 0.04 | 0.60 | 0.03 | 1
+Which one of the following concentration units does not depend on temperature? | Normality | Molarity | Molality | All of these | 3
+What is soda water? | Solution of CO2 gas in water | Solution of CO2 gas in gas | Solution of water in solid | All of these | 1
+Study the figure of a solid depicting arrangement of particles. Which is the most appropriate term used for it? | Isotropy | Anisotropy | Irregular | Amorphous nature | 2
+Homogeneous mixture of two or more than two components is called | solute | solvent | Both A and B | solution | 4
+Which of the following is an example of gaseous solution? | Camphor in nitrogen gas | Solution of hydrogen in palladium | Chloroform mixed with nitrogen gas | Both A and C | 1
+234.2 gm of sugar syrup contains 34.2 gm sugar. What is the molality of the solution? | 0.1 | 0.5 | 3.0 | 4.0 | 2
+In amalgam of mercury with sodium, solvent is | mercury | sodium | amalgam | None of these | 2
+What is the mole fraction of glucose in 10% w/W glucose solution? | 0.01 | 0.02 | 0.03 | 0.04 | 1
+Which of the following respiratory machines by mixture of gases is used for deep sea divers? | Nitrogen + Oxygen | Neon + Oxygen | Helium + Oxygen | Krypton + Oxygen | 3
+Which one of the following is a colligative property? | Viscosity | Surface tension | Refractive index | Osmotic pressure | 4
+In comparison to 0.01 M solution of glucose, the depression in freezing point of 0.01 M MgCl2 solution is | same | about twice | about three times | about six times | 3
+The van't Hoff factor of Ca(NO3)2 is | 1 | 2 | 3 | 4 | 3
+Tyndall effect is observed in | Solution | Precipitate | Sol | Vapours | 3
+One Faraday of electricity is equal to how many coulombs? | 96500 | 96550 | 94500 | 96000 | 1
+Inverse of resistance is called | Conductance | Resistance | Good conductor | None of these | 1
+For strong electrolytes molar conductivity | increases on dilution | decreases on dilution | remains constant on dilution | All of these | 1
+The unit of specific conductance is | Ohm cm-1 | Ohm cm-2 | Ohm-1 cm-1 | Ohm-1 cm-2 | 3
+Which of the following is necessary for rusting of iron? | Dry air | Moist air | Distilled water | Oxygen and CO2 | 2
+In a Daniell cell | chemical energy is converted to electrical energy | electrical energy is converted to chemical energy | utilized in conduction | potential energy is converted to electrical | 1
+Which of the following is the correct cell representation for the given cell reaction? Zn + H2SO4 -> ZnSO4 + H2 | Zn / Zn2+ // H+ / H2 | Zn / Zn2+ // H+, H2 / Pt | Zn / ZnSO4 // H2SO4 / Zn | Zn / H2SO4 // ZnSO4 / H2 | 2
+When a chemical reaction takes place, during the course of the reaction the rate of reaction | keeps on increasing with time | remains constant with time | keeps on decreasing with time | shows irregular trend with time | 3
+The best way to protect iron from rusting is | Making iron cathode | Putting it in saline water | Both A and B | None of these | 1
+The cell reaction of the galvanic cell: Cu(s)/Cu2+(aq)//Hg2+(aq)/Hg(l) is | Hg + Cu2+ -> Hg2+ + Cu | Hg + Cu2+ -> Cu + Hg+ | Cu + Hg -> CuHg | Cu + Hg2+ -> Cu2+ + Hg | 4
+Which of the following reactions is possible at anode? | 2Cr3+ + 7H2O -> Cr2O72- + 14H+ | F2 -> 2F- | 1/2 O2 + 2H+ -> H2O | None of these | 1
+How much charge is required for reduction of 1 mole of Al3+ to Al? | 3.0 x 10^5 C | 28.95 x 10^5 C | 289.5 x 10^5 C | 2.895 x 10^5 C | 4
+The standard reduction potential values of elements A, B and C are +0.68 V, -2.50 V and 0.50 V respectively. The order of their reducing power is | A > B > C | A > C > B | C > B > A | B > C > A | 4
+In the cell Zn/Zn2+//Cu2+/Cu, the negative terminal is | Cu | Cu2+ | Zn | Zn2+ | 3
+A solid AB has a rock salt structure. If radius of cation A+ is 120 pm, what is the minimum value of radius of B- anion? | 120 pm | 240 pm | 290 pm | 360 pm | 3
