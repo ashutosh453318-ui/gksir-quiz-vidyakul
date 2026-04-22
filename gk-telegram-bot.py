@@ -33,11 +33,15 @@ OWNER_ID = 6527942155
 # Spam Words
 BANNED_WORDS = ["scam", "fraud", "casino", "illegal", "bitcoin", "gali", "badword1", "badword2", "badword3", "join fast", "investment"]
 
-# Subjects aur unki files mapping
-SUBJECTS_FILES = {
-    "physics": "physics.txt",
-    "chemistry": "chemistry.txt",
-    "gk": "gk.txt"
+# --- QUIZ FOLDERS & FILES HIERARCHY ---
+# Yahan se aap kitne bhi chapters add kar sakte hain
+QUIZ_STRUCTURE = {
+    "physics": {
+        "Chapter 1": "physics_chapter1.txt"
+    },
+    "chemistry": {
+        "Solution": "chemistry_chapter1.txt"
+    }
 }
 
 ACTIVE_POLLS = {}
@@ -100,7 +104,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS quiz_state (
             chat_id INTEGER PRIMARY KEY,
             current_index INTEGER DEFAULT 0,
-            subject TEXT DEFAULT 'gk'
+            subject TEXT DEFAULT 'chemistry_chapter1.txt'
         )
     """)
     conn.commit()
@@ -113,7 +117,7 @@ def get_quiz_state(chat_id):
     result = cursor.fetchone()
     conn.close()
     if result: return result[0], result[1]
-    return 0, 'gk'
+    return 0, 'chemistry_chapter1.txt'
 
 def update_quiz_state(chat_id, new_index, subject=None):
     conn = get_db_connection()
@@ -176,11 +180,12 @@ def get_top_scorers(chat_id):
     return rows
 
 # --- LEADERBOARD FORMATTER ---
-def generate_leaderboard_msg(chat_id, subject, reason="Completed"):
+def generate_leaderboard_msg(chat_id, file_name, reason="Completed"):
     top_users = get_top_scorers(chat_id)
     total_asked = COMPETITION_STATS.get(chat_id, {}).get('total_asked', 0)
     
-    sub_title = subject.upper() if subject else "QUIZ"
+    # Formats file name like "physics_chapter1.txt" -> "PHYSICS CHAPTER1"
+    sub_title = file_name.replace(".txt", "").replace("_", " ").upper() if file_name else "QUIZ"
     
     msg = f"🏁 The quiz '{sub_title}' has finished! ({reason})\n\n"
     msg += f"<i>{total_asked} questions answered</i>\n\n"
@@ -211,16 +216,16 @@ def generate_leaderboard_msg(chat_id, subject, reason="Completed"):
 
 # --- FILE SETUP & READING ---
 def create_dummy_files_if_not_exist():
-    for subject, file_name in SUBJECTS_FILES.items():
-        if not os.path.exists(file_name):
-            with open(file_name, "w", encoding="utf-8") as f:
-                f.write(f"Sample {subject.capitalize()} Question? | Option A | Option B | Option C | Option D | 1\n")
-            logger.info(f"Created sample file: {file_name}")
+    for subject, chapters in QUIZ_STRUCTURE.items():
+        for chap_name, file_name in chapters.items():
+            if not os.path.exists(file_name):
+                with open(file_name, "w", encoding="utf-8") as f:
+                    f.write(f"Sample {subject.capitalize()} {chap_name} Question? | Option A | Option B | Option C | Option D | 1\n")
+                logger.info(f"Created sample file: {file_name}")
 
-def load_questions(subject):
-    file_name = SUBJECTS_FILES.get(subject, "gk.txt")
+def load_questions(file_name):
     questions = []
-    if not os.path.exists(file_name):
+    if not file_name or not os.path.exists(file_name):
         return []
     
     try:
@@ -284,11 +289,11 @@ async def moderate_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- CUSTOM QUIZ RUNNER ---
 async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> bool:
-    current_idx, subject = get_quiz_state(chat_id)
-    questions = load_questions(subject)
+    current_idx, file_name = get_quiz_state(chat_id)
+    questions = load_questions(file_name)
     
     if not questions:
-        await context.bot.send_message(chat_id, f"⚠️ '{SUBJECTS_FILES.get(subject)}' file khali hai ya galat format mein hai!")
+        await context.bot.send_message(chat_id, f"⚠️ '{file_name}' file khali hai ya galat format mein hai!")
         return False
 
     # Agar questions khatam ho gaye toh FALSE return karo
@@ -300,7 +305,15 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     try:
         total_q = len(questions)
         q_num = current_idx + 1
-        sub_title = subject.capitalize()
+        sub_title = file_name.replace(".txt", "").replace("_", " ").title()
+        
+        # --- EXPLANATION (BULB ICON) GENERATOR ---
+        correct_ans_text = question_data['options'][question_data['correct']]
+        explanation_text = (
+            f"✅ Sahi Jawab: {correct_ans_text}\n\n"
+            f"📱 Telegram: https://t.me/current_affairs_live_quiz\n"
+            f"🌐 Website: todayvacancy.in"
+        )
         
         message = await context.bot.send_poll(
             chat_id=chat_id,
@@ -308,6 +321,7 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
             options=question_data['options'],
             type=Poll.QUIZ,
             correct_option_id=question_data['correct'],
+            explanation=explanation_text,  # Bulb Icon & Text included here
             is_anonymous=False,
             open_period=8 # 8 Second Timer
         )
@@ -318,7 +332,7 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
             'chat_id': chat_id,
             'sent_time': time.time()
         }
-        update_quiz_state(chat_id, current_idx + 1, subject)
+        update_quiz_state(chat_id, current_idx + 1, file_name)
         
         # Total Asked Questions increment karo
         if chat_id not in COMPETITION_STATS:
@@ -330,7 +344,7 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     except Exception as e:
         logger.error(f"Quiz Error in Chat {chat_id}: {e}")
         await context.bot.send_message(chat_id, f"⚠️ Question bhejne mein dikkat aayi (Error: {e}). \nPoll option 100 character se chota hona chahiye.")
-        update_quiz_state(chat_id, current_idx + 1, subject) 
+        update_quiz_state(chat_id, current_idx + 1, file_name) 
         return True 
 
 async def quiz_runner_task(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -353,8 +367,8 @@ async def quiz_runner_task(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     
     # Ye block tabhi chalega jab 10 questions poore ho jayenge
     if chat_id in QUIZ_TASKS:
-        _, subject = get_quiz_state(chat_id)
-        msg = generate_leaderboard_msg(chat_id, subject, reason)
+        _, file_name = get_quiz_state(chat_id)
+        msg = generate_leaderboard_msg(chat_id, file_name, reason)
         await context.bot.send_message(chat_id, msg, parse_mode="HTML")
         del QUIZ_TASKS[chat_id]
 
@@ -381,12 +395,13 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # --- COMMANDS ---
 async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_message = (
-        "👋 Welcome to the Ultimate Quiz Bot!\n\n"
-        "Main aapko Physics, Chemistry aur General Knowledge sikhne me madad karunga.\n\n"
-        "📜 <b>My Commands:</b>\n"
+        "👋 Hello! Main **Gyanendra Shukla**, aapko Ultimate Quiz Karaoonga.\n\n"
+        "Main aapko **Physics** aur **Chemistry** chapters sikhne me madad karunga.\n\n"
+        "📜 <b>This Features:</b>\n"
         "🔹 /startcomp - Start a new quiz competition\n"
         "🔹 /stop - Stop an ongoing quiz\n"
-        "🔹 /resetq - Reset question sequence to 1\n\n"
+        "🔹 /more - Agle 10 questions mangwayein\n"
+        "🔹 /resetq - Question sequence reset karein\n\n"
         "Niche command pe click karein ya menu se select karein! 🚀"
     )
     try:
@@ -404,14 +419,14 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Is chat mein competition pehle se chal raha hai! Pehle /stop karein.")
         return
 
+    # ONLY PHYSICS AND CHEMISTRY OPTIONS
     keyboard = [
-        [InlineKeyboardButton("⚛️ Physics", callback_data="start_physics")],
-        [InlineKeyboardButton("🧪 Chemistry", callback_data="start_chemistry")],
-        [InlineKeyboardButton("🌍 Gen Knowledge", callback_data="start_gk")]
+        [InlineKeyboardButton("⚛️ Physics", callback_data="subj_physics")],
+        [InlineKeyboardButton("🧪 Chemistry", callback_data="subj_chemistry")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     try:
-        await update.message.reply_text("📚 <b>Choose a Subject to Start Quiz:</b>\n\n(Aapka purana score reset ho jayega)", reply_markup=reply_markup, parse_mode="HTML")
+        await update.message.reply_text("📚 <b>Choose a Subject to Start Quiz:</b>", reply_markup=reply_markup, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Menu error: {e}")
 
@@ -437,18 +452,46 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     data = query.data
-    if data.startswith("start_"):
-        subject = data.split("_")[1]
+    
+    # CASE 1: MAIN MENU (BACK BUTTON)
+    if data == "back_to_main":
+        keyboard = [
+            [InlineKeyboardButton("⚛️ Physics", callback_data="subj_physics")],
+            [InlineKeyboardButton("🧪 Chemistry", callback_data="subj_chemistry")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("📚 <b>Choose a Subject to Start Quiz:</b>", reply_markup=reply_markup, parse_mode="HTML")
+        return
+
+    # CASE 2: SUBJECT SELECTED (SHOW CHAPTERS)
+    if data.startswith("subj_"):
+        subject = data.split("_")[1] # e.g., 'physics' or 'chemistry'
+        keyboard = []
+        
+        # Load chapters from QUIZ_STRUCTURE dynamically
+        if subject in QUIZ_STRUCTURE:
+            for chap_name, file_name in QUIZ_STRUCTURE[subject].items():
+                keyboard.append([InlineKeyboardButton(f"📂 {chap_name}", callback_data=f"play_{file_name}")])
+                
+        keyboard.append([InlineKeyboardButton("🔙 Back to Subjects", callback_data="back_to_main")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"📘 <b>{subject.capitalize()}</b> ke chapters:\nSelect a chapter to start:", reply_markup=reply_markup, parse_mode="HTML")
+        return
+
+    # CASE 3: CHAPTER SELECTED (START THE QUIZ)
+    if data.startswith("play_"):
+        file_name = data.split("play_")[1] # e.g., 'chemistry_chapter1.txt'
+        display_sub = file_name.replace(".txt", "").replace("_", " ").title()
         
         reset_scores(chat_id)
         
-        # Hamesha question index 0 se start hoga jab bhi naya quiz shuru hoga
-        update_quiz_state(chat_id, 0, subject)
+        # Hamesha question index 0 se start hoga jab naya chapter start hoga
+        update_quiz_state(chat_id, 0, file_name)
         
         # Competition naye sire se shuru, Stats Zero kardo
         COMPETITION_STATS[chat_id] = {'total_asked': 0}
         
-        await query.edit_message_text(f"🚀 {subject.capitalize()} COMPETITION START! 🚀\n⚡ 10 Questions ka round\n⚡ Har 10 Second me Naya Sawal\n\nTaiyar ho jao! 🏁")
+        await query.edit_message_text(f"🚀 {display_sub} COMPETITION START! 🚀\n⚡ 10 Questions ka round\n⚡ Har 10 Second me Naya Sawal\n\nTaiyar ho jao! 🏁")
         
         if chat_id in QUIZ_TASKS:
             QUIZ_TASKS[chat_id].cancel()
@@ -474,16 +517,17 @@ async def more_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Quiz pehle se chal raha hai!")
         return
         
-    current_idx, subject = get_quiz_state(chat_id)
-    if not subject:
-        await update.message.reply_text("⚠️ Pehle /startcomp use karke koi subject select karein!")
+    current_idx, file_name = get_quiz_state(chat_id)
+    if not file_name or file_name == 'gk':
+        await update.message.reply_text("⚠️ Pehle /startcomp use karke koi subject aur chapter select karein!")
         return
         
     # Stats track karne ke liye, taaki purana leaderboard merge ho jaye
     if chat_id not in COMPETITION_STATS:
         COMPETITION_STATS[chat_id] = {'total_asked': 0}
         
-    await update.message.reply_text(f"▶️ Quiz Resume ho raha hai! Subject: {subject.capitalize()}\n⚡ Agle 10 sawal aa rahe hain!")
+    display_sub = file_name.replace(".txt", "").replace("_", " ").title()
+    await update.message.reply_text(f"▶️ Quiz Resume ho raha hai! Topic: {display_sub}\n⚡ Agle 10 sawal aa rahe hain!")
     
     task = asyncio.create_task(quiz_runner_task(chat_id, context))
     QUIZ_TASKS[chat_id] = task
@@ -501,8 +545,8 @@ async def stop_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     QUIZ_TASKS[chat_id].cancel()
     del QUIZ_TASKS[chat_id]
     
-    _, subject = get_quiz_state(chat_id)
-    msg = generate_leaderboard_msg(chat_id, subject, "Manually Stopped")
+    _, file_name = get_quiz_state(chat_id)
+    msg = generate_leaderboard_msg(chat_id, file_name, "Manually Stopped")
     await update.message.reply_text(msg, parse_mode="HTML")
 
 async def setup_commands(application: Application):
