@@ -1,0 +1,5 @@
+Force ki SI unit kya hai? | Newton | Joule | Watt | Pascal | 1
+Light ki speed vacuum mein lagbhag kitni hoti hai? | 3x10^5 km/s | 3x10^8 m/s | 3x10^6 m/s | 3x10^4 km/s | 2
+Sound waves kis mein travel nahi kar sakti? | Pani | Hawa | Vacuum | Loha | 3
+Gravity ki value Earth par kitni hoti hai? | 9.8 m/s² | 8.9 m/s² | 10.5 m/s² | 9.0 m/s² | 1
+Work ka formula kya hai? | Force / Area | Mass x Acceleration | Force x Distance | Mass x Velocity | 3
