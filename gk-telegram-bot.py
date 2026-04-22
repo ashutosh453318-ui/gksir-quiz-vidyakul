@@ -2,9 +2,10 @@ import logging
 import re
 import sqlite3
 import asyncio
-import sys
 import os
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, Poll, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from telegram.ext import (
     Application,
@@ -15,10 +16,7 @@ from telegram.ext import (
     ContextTypes,
     PollAnswerHandler,
 )
-
-# --- WINDOWS SPEED FIX (Harmless on Linux/Render) ---
-if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+from telegram.request import HTTPXRequest
 
 # --- CONFIGURATION ---
 TOKEN = "8653449129:AAGGbWi7UxLcGRqCgi3qIziADuMhMymP5y0"
@@ -35,6 +33,24 @@ SUBJECTS_FILES = {
 }
 
 ACTIVE_POLLS = {}
+
+# --- DUMMY WEB SERVER FOR RENDER ---
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is alive and running on Render!")
+
+    def log_message(self, format, *args):
+        pass # Console clean rakhne ke liye log disable kiya hai
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+    server_address = ('0.0.0.0', port)
+    httpd = HTTPServer(server_address, DummyHandler)
+    print(f"Starting dummy web server on port {port} to satisfy Render health checks...")
+    httpd.serve_forever()
 
 # --- DATABASE SETUP ---
 def init_db():
@@ -376,14 +392,19 @@ async def setup_commands(application: Application):
 
 # --- MAIN RUNNER ---
 def main():
+    # Render ke liye Dummy Web Server ko ek alag background thread me start karein
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
     init_db()
-    print("🚀 Bot starting on Cloud Server...")
+    print("🚀 Bot starting on Cloud Server with Dummy Server...")
     
     for sub, file in SUBJECTS_FILES.items():
         if not os.path.exists(file): print(f"⚠️ Warning: '{file}' nahi mili!")
         else: print(f"✅ '{file}' loaded.")
 
-    app = Application.builder().token(TOKEN).post_init(setup_commands).build()
+    # Render connection requirements handle karne ke liye naya HTTPXRequest settings
+    req = HTTPXRequest(connection_pool_size=20, connect_timeout=30, read_timeout=30)
+    app = Application.builder().token(TOKEN).request(req).post_init(setup_commands).build()
 
     app.add_handler(CommandHandler("start", start_bot))
     app.add_handler(CommandHandler("startcomp", show_quiz_menu)) 
