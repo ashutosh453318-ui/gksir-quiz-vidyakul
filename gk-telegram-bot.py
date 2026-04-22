@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 # --- CONFIGURATION ---
 TOKEN = "8653449129:AAGGbWi7UxLcGRqCgi3qIziADuMhMymP5y0"
 OWNER_ID = 6527942155
+GYANENDRA_SIR_USERNAME = "gyanendrasirchemistry" # Bina @ ke likhna hai
 
 # Spam Words
 BANNED_WORDS = ["scam", "fraud", "casino", "illegal", "bitcoin", "gali", "badword1", "badword2", "badword3", "join fast", "investment"]
@@ -250,16 +251,17 @@ def load_questions(file_name):
         logger.error(f"File Error [{file_name}]: {e}")
     return questions
 
-# --- PERMISSION CHECK ---
+# --- STRICT PERMISSION CHECK (ONLY SANTOSH & GYANENDRA SIR) ---
 async def is_authorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    chat = update.effective_chat
-    user_id = update.effective_user.id
-    if user_id == OWNER_ID: return True
-    if chat.type == 'private': return True
-    try:
-        member = await context.bot.get_chat_member(chat.id, user_id)
-        if member.status in ['creator', 'administrator']: return True
-    except: pass
+    user = update.effective_user
+    if not user:
+        return False
+        
+    # Check by ID (Santosh) or Username (Gyanendra Sir)
+    if user.id == OWNER_ID or (user.username and user.username.lower() == GYANENDRA_SIR_USERNAME.lower()):
+        return True
+        
+    # Agar inme se koi nahi hai toh seedha False
     return False
 
 # --- MODERATION LOGIC ---
@@ -323,7 +325,7 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
             correct_option_id=question_data['correct'],
             explanation=explanation_text,  # Bulb Icon & Text included here
             is_anonymous=False,
-            open_period=15 # 8 Second Timer
+            open_period=15 # 15 Second Timer
         )
         
         # Save Send Time to Calculate Duration
@@ -361,7 +363,7 @@ async def quiz_runner_task(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 reason = "All Questions Completed!"
                 break
                 
-            await asyncio.sleep(10) # 10 seconds interval between questions
+            await asyncio.sleep(17) # Naya interval (15 sec timer + 2 sec extra wait)
     except asyncio.CancelledError:
         return # Task Cancelled
     
@@ -411,7 +413,7 @@ async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update, context):
-        await update.message.reply_text("🚫 Group mein sirf Admins aur Owner hi Quiz start kar sakte hain.")
+        await update.message.reply_text("🚫 Warning: Yeh command keval Santosh aur Gyanendra Sir (@gyanendrasirchemistry) hi start kar sakte hain!")
         return
 
     chat_id = update.effective_chat.id
@@ -434,24 +436,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer() 
     
-    user_id = query.from_user.id
-    chat_id = query.message.chat_id
-    chat = query.message.chat
-
-    is_admin = False
-    if chat.type == 'private' or user_id == OWNER_ID:
-        is_admin = True
-    else:
-        try:
-            member = await context.bot.get_chat_member(chat_id, user_id)
-            if member.status in ['creator', 'administrator']: is_admin = True
-        except: pass
-
-    if not is_admin:
-        await query.answer("🚫 Sirf admin yeh button use kar sakte hain!", show_alert=True)
+    # Authorized checks for inline buttons
+    if not await is_authorized(update, context):
+        await query.answer("🚫 Warning: Keval Santosh aur Gyanendra Sir hi ise use kar sakte hain!", show_alert=True)
         return
 
     data = query.data
+    chat_id = query.message.chat_id
     
     # CASE 1: MAIN MENU (BACK BUTTON)
     if data == "back_to_main":
@@ -491,7 +482,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Competition naye sire se shuru, Stats Zero kardo
         COMPETITION_STATS[chat_id] = {'total_asked': 0}
         
-        await query.edit_message_text(f"🚀 {display_sub} COMPETITION START! 🚀\n⚡ 10 Questions ka round\n⚡ Har 10 Second me Naya Sawal\n\nTaiyar ho jao! 🏁")
+        await query.edit_message_text(f"🚀 {display_sub} COMPETITION START! 🚀\n⚡ 10 Questions ka round\n⚡ Har 15 Second me Naya Sawal\n\nTaiyar ho jao! 🏁")
         
         if chat_id in QUIZ_TASKS:
             QUIZ_TASKS[chat_id].cancel()
@@ -501,7 +492,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def reset_question_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update, context):
-        await update.message.reply_text("🚫 Not authorized.")
+        await update.message.reply_text("🚫 Warning: Yeh command keval Santosh aur Gyanendra Sir (@gyanendrasirchemistry) hi start kar sakte hain!")
         return
     chat_id = update.effective_chat.id
     update_quiz_state(chat_id, 0)
@@ -509,7 +500,7 @@ async def reset_question_number(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def more_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update, context):
-        await update.message.reply_text("🚫 Group mein sirf Admins rok sakte hain.")
+        await update.message.reply_text("🚫 Warning: Yeh command keval Santosh aur Gyanendra Sir (@gyanendrasirchemistry) hi start kar sakte hain!")
         return
     chat_id = update.effective_chat.id
     
@@ -534,7 +525,7 @@ async def more_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stop_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update, context):
-        await update.message.reply_text("🚫 Group mein sirf Admins rok sakte hain.")
+        await update.message.reply_text("🚫 Warning: Yeh command keval Santosh aur Gyanendra Sir (@gyanendrasirchemistry) hi start kar sakte hain!")
         return
     chat_id = update.effective_chat.id
     
@@ -569,7 +560,7 @@ def main():
     init_db()
     create_dummy_files_if_not_exist() # Yeh function Ensure karega ki files miss na hon!
     
-    logger.info("Bot Live! With Custom Async Task Manager.")
+    logger.info("Bot Live! With Strict User Authorization.")
     
     req = HTTPXRequest(connection_pool_size=20, connect_timeout=30, read_timeout=30)
     app = Application.builder().token(TOKEN).request(req).post_init(setup_commands).build()
