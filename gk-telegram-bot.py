@@ -18,6 +18,13 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 # --- CONFIGURATION ---
 TOKEN = "8653449129:AAGGbWi7UxLcGRqCgi3qIziADuMhMymP5y0"
 OWNER_ID = 6527942155
@@ -43,14 +50,17 @@ class DummyHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is alive and running on Render!")
 
     def log_message(self, format, *args):
-        pass # Console clean rakhne ke liye log disable kiya hai
+        pass
 
 def run_dummy_server():
-    port = int(os.environ.get("PORT", 10000))
-    server_address = ('0.0.0.0', port)
-    httpd = HTTPServer(server_address, DummyHandler)
-    print(f"Starting dummy web server on port {port} to satisfy Render health checks...")
-    httpd.serve_forever()
+    try:
+        port = int(os.environ.get("PORT", 10000))
+        server_address = ('0.0.0.0', port)
+        httpd = HTTPServer(server_address, DummyHandler)
+        logger.info(f"Starting dummy web server on port {port} to satisfy Render health checks...")
+        httpd.serve_forever()
+    except Exception as e:
+        logger.error(f"Dummy Server Error: {e}")
 
 # --- DATABASE SETUP ---
 def init_db():
@@ -131,7 +141,6 @@ def add_points(chat_id, user_id, full_name, points_to_add):
 def get_top_scorers(chat_id):
     conn = sqlite3.connect("quiz_scores.db")
     cursor = conn.cursor()
-    # Pura game change: Jiske marks zyada wo upar. Agar marks same hain, toh jisne jaldi jawab diya (last_time ASC) wo upar!
     cursor.execute("SELECT full_name, points FROM scores WHERE chat_id = ? ORDER BY points DESC, last_time ASC LIMIT 10", (chat_id,))
     rows = cursor.fetchall()
     conn.close()
@@ -160,9 +169,9 @@ def load_questions(subject):
                             "correct": correct_idx
                         })
                     except Exception as inner_e:
-                        print(f"Error parsing index in line: {line}. Error: {inner_e}")
+                        logger.warning(f"Error parsing index in line: {line}. Error: {inner_e}")
     except Exception as e:
-        print(f"File Error [{file_name}]: {e}")
+        logger.error(f"File Error [{file_name}]: {e}")
     return questions
 
 # --- PERMISSION CHECK ---
@@ -252,7 +261,7 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE):
         update_quiz_state(chat_id, current_idx + 1, subject)
         
     except Exception as e:
-        print(f"Quiz Error in Chat {chat_id}: {e}")
+        logger.error(f"Quiz Error in Chat {chat_id}: {e}")
         await context.bot.send_message(chat_id, f"⚠️ Question bhejne mein dikkat aayi (Error: {e}). \nKripya apne .txt file ka format check karein (Poll option 100 character se chota hona chahiye).")
         current_jobs = context.job_queue.get_jobs_by_name(f"quiz_{chat_id}")
         for job in current_jobs: job.schedule_removal()
@@ -342,7 +351,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("start_"):
         subject = data.split("_")[1]
         
-        # JAISE HI NAYA QUIZ START HOGA, PURANE SCORES DELETE HO JAYENGE (FRESH SCOREBOARD)
+        # JAISE HI NAYA QUIZ START HOGA, PURANE SCORES DELETE HO JAYENGE
         reset_scores(chat_id)
         
         current_idx, _ = get_quiz_state(chat_id)
@@ -392,17 +401,23 @@ async def setup_commands(application: Application):
 
 # --- MAIN RUNNER ---
 def main():
-    # Render ke liye Dummy Web Server ko ek alag background thread me start karein
+    # --- PYTHON 3.14 ASYNCIO FIX ---
+    # Render Python 3.14 use kar raha hai jahan default event loop missing hone par error aata hai.
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
     init_db()
-    print("🚀 Bot starting on Cloud Server with Dummy Server...")
+    logger.info("Bot Live! With Dummy Web Server for Render.")
     
     for sub, file in SUBJECTS_FILES.items():
-        if not os.path.exists(file): print(f"⚠️ Warning: '{file}' nahi mili!")
-        else: print(f"✅ '{file}' loaded.")
+        if not os.path.exists(file): logger.warning(f"⚠️ Warning: '{file}' nahi mili!")
+        else: logger.info(f"✅ '{file}' loaded.")
 
-    # Render connection requirements handle karne ke liye naya HTTPXRequest settings
     req = HTTPXRequest(connection_pool_size=20, connect_timeout=30, read_timeout=30)
     app = Application.builder().token(TOKEN).request(req).post_init(setup_commands).build()
 
@@ -414,8 +429,10 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, moderate_messages))
     app.add_handler(PollAnswerHandler(handle_poll_answer))
 
-    print("✅ Bot Live Hai! Telegram par ja kar /start dabayein.")
-    app.run_polling()
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        logger.error(f"Fatal error during polling: {e}")
 
 if __name__ == "__main__":
     main()
