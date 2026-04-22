@@ -16,6 +16,7 @@ from telegram.ext import (
     ContextTypes,
     PollAnswerHandler,
 )
+from telegram.request import HTTPXRequest
 
 # --- LOGGING SETUP ---
 logging.basicConfig(
@@ -306,7 +307,6 @@ async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Niche command pe click karein ya menu se select karein! 🚀"
     )
     try:
-        # Changed Markdown to HTML to avoid silent parsing errors
         await update.message.reply_text(welcome_message, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Start CMD error: {e}")
@@ -328,7 +328,6 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     try:
-        # Changed Markdown to HTML to avoid silent parsing errors
         await update.message.reply_text("📚 <b>Choose a Subject to Start Quiz:</b>\n\n(Aapka purana score reset ho jayega)", reply_markup=reply_markup, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Menu error: {e}")
@@ -409,8 +408,16 @@ async def setup_commands(application: Application):
     except Exception as e:
         logger.error(f"Failed to set bot commands: {e}")
 
-# --- MAIN ASYNC BOT RUNNER ---
-async def main_bot():
+# --- MAIN RUNNER ---
+def main():
+    # Render ke liye Dummy Web Server ko ek alag background thread me start karein
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
+    # --- PYTHON 3.14 ASYNCIO FIX ---
+    # Set a new event loop for the main thread to completely prevent RuntimeError
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     init_db()
     logger.info("Bot Live! With Dummy Web Server for Render.")
     
@@ -418,8 +425,8 @@ async def main_bot():
         if not os.path.exists(file): logger.warning(f"⚠️ Warning: '{file}' nahi mili!")
         else: logger.info(f"✅ '{file}' loaded.")
 
-    # Using Default Request Client which is completely safe for Python 3.14
-    app = Application.builder().token(TOKEN).post_init(setup_commands).build()
+    req = HTTPXRequest(connection_pool_size=20, connect_timeout=30, read_timeout=30)
+    app = Application.builder().token(TOKEN).request(req).post_init(setup_commands).build()
 
     app.add_handler(CommandHandler("start", start_bot))
     app.add_handler(CommandHandler("startcomp", show_quiz_menu)) 
@@ -429,26 +436,11 @@ async def main_bot():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, moderate_messages))
     app.add_handler(PollAnswerHandler(handle_poll_answer))
 
-    # Official PTB way to run custom asyncio loop to avoid 3.14 bug
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling(drop_pending_updates=True)
-    
     logger.info("✅ Bot is now polling messages...")
     
-    # Run forever
-    stop_signal = asyncio.Event()
-    await stop_signal.wait()
-
-def main():
-    # Render ke liye Dummy Web Server ko ek alag background thread me start karein
-    threading.Thread(target=run_dummy_server, daemon=True).start()
-
     try:
-        # Pura bot ek manual Asyncio loop ke zariye start hoga (No event loop errors)
-        asyncio.run(main_bot())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot Stopped.")
+        # Run polling normally, which will automatically drop pending updates gracefully
+        app.run_polling(drop_pending_updates=True)
     except Exception as e:
         logger.error(f"Fatal Error: {e}")
 
