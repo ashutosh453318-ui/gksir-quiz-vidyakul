@@ -395,8 +395,8 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # --- COMMANDS ---
 async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_message = (
-        "👋 Hello! Main **Gyanendra Shukla**, aapko Ultimate Quiz Karaoonga.\n\n"
-        "Main aapko **Physics** aur **Chemistry** chapters sikhne me madad karunga.\n\n"
+        "👋 Hello! Main <b>Gyanendra Shukla</b>, aapko Ultimate Quiz Karaoonga.\n\n"
+        "Main aapko <b>Physics</b> aur <b>Chemistry</b> chapters sikhne me madad karunga.\n\n"
         "📜 <b>This Features:</b>\n"
         "🔹 /startcomp - Start a new quiz competition\n"
         "🔹 /stop - Stop an ongoing quiz\n"
