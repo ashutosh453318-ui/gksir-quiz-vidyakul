@@ -6,6 +6,7 @@ import os
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from telegram import Update, Poll, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from telegram.ext import (
     Application,
@@ -146,7 +147,15 @@ def get_top_scorers(chat_id):
     conn.close()
     return rows
 
-# --- FILE READING ---
+# --- FILE SETUP & READING ---
+def create_dummy_files_if_not_exist():
+    for subject, file_name in SUBJECTS_FILES.items():
+        if not os.path.exists(file_name):
+            with open(file_name, "w", encoding="utf-8") as f:
+                # Format: Question | Option 1 | Option 2 | Option 3 | Option 4 | Correct Option Index (1-4)
+                f.write(f"Sample {subject.capitalize()} Question? | Option A | Option B | Option C | Option D | 1\n")
+            logger.info(f"Created sample file: {file_name}")
+
 def load_questions(subject):
     file_name = SUBJECTS_FILES.get(subject, "gk.txt")
     questions = []
@@ -158,16 +167,18 @@ def load_questions(subject):
             for line in f:
                 if not line.strip() or line.startswith("#"): continue
                 parts = line.strip().split("|")
-                if len(parts) == 6:
+                if len(parts) >= 6:
                     q_text = parts[0].strip()
                     options = [p.strip() for p in parts[1:5]]
                     try:
                         correct_idx = int(parts[5].strip()) - 1
-                        questions.append({
-                            "q": q_text,
-                            "options": options,
-                            "correct": correct_idx
-                        })
+                        # Telegram requires exactly 2-10 options
+                        if len(options) >= 2:
+                            questions.append({
+                                "q": q_text,
+                                "options": options,
+                                "correct": correct_idx
+                            })
                     except Exception as inner_e:
                         logger.warning(f"Error parsing index in line: {line}. Error: {inner_e}")
     except Exception as e:
@@ -211,13 +222,13 @@ async def moderate_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await warning.delete()
         except: pass
 
-# --- CUSTOM QUIZ RUNNER (Replaces Job Queue) ---
+# --- CUSTOM QUIZ RUNNER ---
 async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> bool:
     current_idx, subject = get_quiz_state(chat_id)
     questions = load_questions(subject)
     
     if not questions:
-        await context.bot.send_message(chat_id, f"⚠️ {SUBJECTS_FILES.get(subject)} file khali hai ya nahi mili!")
+        await context.bot.send_message(chat_id, f"⚠️ '{SUBJECTS_FILES.get(subject)}' file khali hai ya galat format mein hai!")
         return False
 
     if current_idx >= len(questions):
@@ -254,12 +265,14 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     except Exception as e:
         logger.error(f"Quiz Error in Chat {chat_id}: {e}")
         await context.bot.send_message(chat_id, f"⚠️ Question bhejne mein dikkat aayi (Error: {e}). \nPoll option 100 character se chota hona chahiye.")
-        return False
+        # Skip this invalid question automatically so it doesn't get stuck
+        update_quiz_state(chat_id, current_idx + 1, subject) 
+        return True 
 
 async def quiz_runner_task(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.sleep(2) # Initial delay before first question
     try:
-        # Loop for maximum 60 questions (10 minutes approx)
+        # Loop for maximum 60 questions
         for _ in range(60):
             if chat_id not in QUIZ_TASKS:
                 break # Manually stopped
@@ -272,7 +285,6 @@ async def quiz_runner_task(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     except asyncio.CancelledError:
         pass
     finally:
-        # Jab loop natural tarike se khatam ho toh auto-stop bulao
         if chat_id in QUIZ_TASKS:
             await stop_competition_auto(context, chat_id)
 
@@ -281,12 +293,12 @@ async def stop_competition_auto(context: ContextTypes.DEFAULT_TYPE, chat_id: int
         del QUIZ_TASKS[chat_id]
     
     top_users = get_top_scorers(chat_id)
-    msg = "🏁 COMPETITION OVER! (Time Up) 🏁\n\n🏅 Final Leaderboard:\n"
+    msg = "🏁 COMPETITION OVER! (Time Up or Completed) 🏁\n\n🏅 Final Leaderboard:\n"
     if top_users:
         for idx, (name, points) in enumerate(top_users, 1):
             msg += f"{idx}. {name} -> {points} Marks\n"
     else:
-        msg += "Kisi ne sahi jawab nahi diya."
+        msg += "Koi leaderboard data nahi."
     await context.bot.send_message(chat_id, msg)
 
 
@@ -373,7 +385,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await query.edit_message_text(f"🚀 {subject.capitalize()} COMPETITION START! 🚀\n⏱️ Duration: 10 Minutes\n⚡ Har 10 Second me Naya Sawal\n\nTaiyar ho jao! 🏁")
         
-        # Naya Custom Quiz Task Start Karo
         if chat_id in QUIZ_TASKS:
             QUIZ_TASKS[chat_id].cancel()
             
@@ -398,7 +409,6 @@ async def stop_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Abhi koi quiz nahi chal raha.")
         return
         
-    # Cancel the running task
     QUIZ_TASKS[chat_id].cancel()
     del QUIZ_TASKS[chat_id]
     
@@ -427,12 +437,10 @@ def main():
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
     init_db()
+    create_dummy_files_if_not_exist() # Yeh function Ensure karega ki files miss na hon!
+    
     logger.info("Bot Live! With Custom Async Task Manager.")
     
-    for sub, file in SUBJECTS_FILES.items():
-        if not os.path.exists(file): logger.warning(f"⚠️ Warning: '{file}' nahi mili!")
-        else: logger.info(f"✅ '{file}' loaded.")
-
     req = HTTPXRequest(connection_pool_size=20, connect_timeout=30, read_timeout=30)
     app = Application.builder().token(TOKEN).request(req).post_init(setup_commands).build()
 
@@ -446,7 +454,6 @@ def main():
 
     logger.info("✅ Bot is now polling messages...")
     
-    # Direct safe polling start
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
