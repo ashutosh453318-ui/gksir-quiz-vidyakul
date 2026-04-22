@@ -6,6 +6,7 @@ import sys
 import os
 import httpx
 import inspect
+import time
 from telegram import Update, Poll, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from telegram.ext import (
     Application,
@@ -16,6 +17,74 @@ from telegram.ext import (
     ContextTypes,
     PollAnswerHandler,
 )
+
+# --- WINDOWS 7 SPEED & HANG FIX ---
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# --- FIX FOR HTTPX VERSION MISMATCH (WINDOWS 7 SUPPORT) ---
+original_timeout_init = httpx.Timeout.__init__
+def patched_timeout_init(self, *args, **kwargs):
+    valid_params = inspect.signature(original_timeout_init).parameters
+    new_kwargs = {}
+    for k, v in kwargs.items():
+        if k in valid_params:
+            new_kwargs[k] = v
+        else:
+            old_k = k + '_timeout'
+            if old_k in valid_params:
+                new_kwargs[old_k] = v
+    original_timeout_init(self, *args, **new_kwargs)
+httpx.Timeout.__init__ = patched_timeout_init
+
+if not hasattr(httpx, 'Limits'):
+    class DummyLimits:
+        def __init__(self, *args, **kwargs): pass
+    httpx.Limits = DummyLimits
+    
+original_client_init = httpx.AsyncClient.__init__
+def patched_client_init(self, *args, **kwargs):
+    try:
+        valid_params = inspect.signature(original_client_init).parameters
+        clean_kwargs = {k: v for k, v in kwargs.items() if k in valid_params}
+    except ValueError:
+        clean_kwargs = kwargs.copy()
+        clean_kwargs.pop('limits', None)
+        clean_kwargs.pop('proxy', None)
+        clean_kwargs.pop('proxies', None)
+    
+    if 'timeout' not in clean_kwargs:
+        clean_kwargs['timeout'] = httpx.Timeout(60.0)
+        
+    original_client_init(self, *args, **clean_kwargs)
+httpx.AsyncClient.__init__ = patched_client_init
+
+if not hasattr(httpx.AsyncClient, 'is_closed'):
+    httpx.AsyncClient.is_closed = property(lambda self: False)
+
+if not hasattr(httpx.Timeout, 'read'):
+    httpx.Timeout.read = property(lambda self: getattr(self, 'read_timeout', 60.0))
+if not hasattr(httpx.Timeout, 'write'):
+    httpx.Timeout.write = property(lambda self: getattr(self, 'write_timeout', 60.0))
+if not hasattr(httpx.Timeout, 'connect'):
+    httpx.Timeout.connect = property(lambda self: getattr(self, 'connect_timeout', 60.0))
+if not hasattr(httpx.Timeout, 'pool'):
+    httpx.Timeout.pool = property(lambda self: getattr(self, 'pool_timeout', 60.0))
+
+if not hasattr(httpx, 'TimeoutException'):
+    try:
+        httpx.TimeoutException = httpx.ReadTimeout 
+    except AttributeError:
+        class DummyTimeoutException(Exception): pass
+        httpx.TimeoutException = DummyTimeoutException
+
+if not hasattr(httpx, 'NetworkError'):
+    try:
+        httpx.NetworkError = httpx.RequestError
+    except AttributeError:
+        class DummyNetworkError(Exception): pass
+        httpx.NetworkError = DummyNetworkError
+
 
 # --- CONFIGURATION ---
 TOKEN = "8653449129:AAGGbWi7UxLcGRqCgi3qIziADuMhMymP5y0"
@@ -43,9 +112,16 @@ def init_db():
             user_id INTEGER,
             full_name TEXT,
             points INTEGER DEFAULT 0,
+            last_time REAL DEFAULT 0,
             PRIMARY KEY (chat_id, user_id)
         )
     """)
+    # Purane database ko update karne ke liye try-except block
+    try:
+        cursor.execute("ALTER TABLE scores ADD COLUMN last_time REAL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass # Column pehle se hai
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS quiz_state (
             chat_id INTEGER PRIMARY KEY,
@@ -88,22 +164,25 @@ def reset_scores(chat_id):
 def add_points(chat_id, user_id, full_name, points_to_add):
     conn = sqlite3.connect("quiz_scores.db")
     cursor = conn.cursor()
+    current_time = time.time() # Speed track karne ke liye
+    
     cursor.execute("SELECT points FROM scores WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
     data = cursor.fetchone()
     if data:
         new_points = data[0] + points_to_add
-        cursor.execute("UPDATE scores SET points = ?, full_name = ? WHERE chat_id = ? AND user_id = ?", 
-                       (new_points, full_name, chat_id, user_id))
+        cursor.execute("UPDATE scores SET points = ?, full_name = ?, last_time = ? WHERE chat_id = ? AND user_id = ?", 
+                       (new_points, full_name, current_time, chat_id, user_id))
     else:
-        cursor.execute("INSERT INTO scores (chat_id, user_id, full_name, points) VALUES (?, ?, ?, ?)", 
-                       (chat_id, user_id, full_name, points_to_add))
+        cursor.execute("INSERT INTO scores (chat_id, user_id, full_name, points, last_time) VALUES (?, ?, ?, ?, ?)", 
+                       (chat_id, user_id, full_name, points_to_add, current_time))
     conn.commit()
     conn.close()
 
 def get_top_scorers(chat_id):
     conn = sqlite3.connect("quiz_scores.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT full_name, points FROM scores WHERE chat_id = ? ORDER BY points DESC LIMIT 10", (chat_id,))
+    # Pura game change: Jiske marks zyada wo upar. Agar marks same hain, toh jisne jaldi jawab diya (last_time ASC) wo upar!
+    cursor.execute("SELECT full_name, points FROM scores WHERE chat_id = ? ORDER BY points DESC, last_time ASC LIMIT 10", (chat_id,))
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -185,8 +264,23 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE):
         for job in current_jobs: job.schedule_removal()
         return
 
+    # Jab saare sawal khatam ho jayein toh leaderboard dikhao aur quiz stop kardo
     if current_idx >= len(questions):
-        current_idx = 0
+        current_jobs = context.job_queue.get_jobs_by_name(f"quiz_{chat_id}")
+        for job in current_jobs: job.schedule_removal()
+        
+        stop_jobs = context.job_queue.get_jobs_by_name(f"stop_{chat_id}")
+        for job in stop_jobs: job.schedule_removal()
+        
+        top_users = get_top_scorers(chat_id)
+        msg = "🏁 ALL QUESTIONS COMPLETED! 🏁\n\n🏅 Final Leaderboard:\n"
+        if top_users:
+            for idx, (name, points) in enumerate(top_users, 1):
+                msg += f"{idx}. {name} -> {points} Marks\n"
+        else:
+            msg += "Kisi ne sahi jawab nahi diya."
+        await context.bot.send_message(chat_id, msg)
+        return
     
     question_data = questions[current_idx]
     
@@ -297,7 +391,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     if data.startswith("start_"):
         subject = data.split("_")[1]
+        
+        # JAISE HI NAYA QUIZ START HOGA, PURANE SCORES DELETE HO JAYENGE (FRESH SCOREBOARD)
         reset_scores(chat_id)
+        
         current_idx, _ = get_quiz_state(chat_id)
         update_quiz_state(chat_id, current_idx, subject)
         
@@ -346,7 +443,7 @@ async def setup_commands(application: Application):
 # --- MAIN RUNNER ---
 def main():
     init_db()
-    print("🚀 Bot starting on Cloud (Render)...")
+    print("🚀 Bot starting with Windows Speed Mode...")
     
     for sub, file in SUBJECTS_FILES.items():
         if not os.path.exists(file): print(f"⚠️ Warning: '{file}' nahi mili!")
