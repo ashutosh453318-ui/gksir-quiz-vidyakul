@@ -4,8 +4,6 @@ import sqlite3
 import asyncio
 import sys
 import os
-import httpx
-import inspect
 import time
 from telegram import Update, Poll, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from telegram.ext import (
@@ -18,73 +16,9 @@ from telegram.ext import (
     PollAnswerHandler,
 )
 
-# --- WINDOWS 7 SPEED & HANG FIX ---
+# --- WINDOWS SPEED FIX (Harmless on Linux/Render) ---
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-# --- FIX FOR HTTPX VERSION MISMATCH (WINDOWS 7 SUPPORT) ---
-original_timeout_init = httpx.Timeout.__init__
-def patched_timeout_init(self, *args, **kwargs):
-    valid_params = inspect.signature(original_timeout_init).parameters
-    new_kwargs = {}
-    for k, v in kwargs.items():
-        if k in valid_params:
-            new_kwargs[k] = v
-        else:
-            old_k = k + '_timeout'
-            if old_k in valid_params:
-                new_kwargs[old_k] = v
-    original_timeout_init(self, *args, **new_kwargs)
-httpx.Timeout.__init__ = patched_timeout_init
-
-if not hasattr(httpx, 'Limits'):
-    class DummyLimits:
-        def __init__(self, *args, **kwargs): pass
-    httpx.Limits = DummyLimits
-    
-original_client_init = httpx.AsyncClient.__init__
-def patched_client_init(self, *args, **kwargs):
-    try:
-        valid_params = inspect.signature(original_client_init).parameters
-        clean_kwargs = {k: v for k, v in kwargs.items() if k in valid_params}
-    except ValueError:
-        clean_kwargs = kwargs.copy()
-        clean_kwargs.pop('limits', None)
-        clean_kwargs.pop('proxy', None)
-        clean_kwargs.pop('proxies', None)
-    
-    if 'timeout' not in clean_kwargs:
-        clean_kwargs['timeout'] = httpx.Timeout(60.0)
-        
-    original_client_init(self, *args, **clean_kwargs)
-httpx.AsyncClient.__init__ = patched_client_init
-
-if not hasattr(httpx.AsyncClient, 'is_closed'):
-    httpx.AsyncClient.is_closed = property(lambda self: False)
-
-if not hasattr(httpx.Timeout, 'read'):
-    httpx.Timeout.read = property(lambda self: getattr(self, 'read_timeout', 60.0))
-if not hasattr(httpx.Timeout, 'write'):
-    httpx.Timeout.write = property(lambda self: getattr(self, 'write_timeout', 60.0))
-if not hasattr(httpx.Timeout, 'connect'):
-    httpx.Timeout.connect = property(lambda self: getattr(self, 'connect_timeout', 60.0))
-if not hasattr(httpx.Timeout, 'pool'):
-    httpx.Timeout.pool = property(lambda self: getattr(self, 'pool_timeout', 60.0))
-
-if not hasattr(httpx, 'TimeoutException'):
-    try:
-        httpx.TimeoutException = httpx.ReadTimeout 
-    except AttributeError:
-        class DummyTimeoutException(Exception): pass
-        httpx.TimeoutException = DummyTimeoutException
-
-if not hasattr(httpx, 'NetworkError'):
-    try:
-        httpx.NetworkError = httpx.RequestError
-    except AttributeError:
-        class DummyNetworkError(Exception): pass
-        httpx.NetworkError = DummyNetworkError
-
 
 # --- CONFIGURATION ---
 TOKEN = "8653449129:AAGGbWi7UxLcGRqCgi3qIziADuMhMymP5y0"
@@ -443,7 +377,7 @@ async def setup_commands(application: Application):
 # --- MAIN RUNNER ---
 def main():
     init_db()
-    print("🚀 Bot starting with Windows Speed Mode...")
+    print("🚀 Bot starting on Cloud Server...")
     
     for sub, file in SUBJECTS_FILES.items():
         if not os.path.exists(file): print(f"⚠️ Warning: '{file}' nahi mili!")
