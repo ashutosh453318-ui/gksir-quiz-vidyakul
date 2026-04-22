@@ -40,6 +40,7 @@ SUBJECTS_FILES = {
 }
 
 ACTIVE_POLLS = {}
+QUIZ_TASKS = {} # Job queue ki jagah apna custom task manager
 
 # --- DUMMY WEB SERVER FOR RENDER ---
 class DummyHandler(BaseHTTPRequestHandler):
@@ -76,11 +77,10 @@ def init_db():
             PRIMARY KEY (chat_id, user_id)
         )
     """)
-    # Purane database ko update karne ke liye try-except block
     try:
         cursor.execute("ALTER TABLE scores ADD COLUMN last_time REAL DEFAULT 0")
     except sqlite3.OperationalError:
-        pass # Column pehle se hai
+        pass
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS quiz_state (
@@ -124,7 +124,7 @@ def reset_scores(chat_id):
 def add_points(chat_id, user_id, full_name, points_to_add):
     conn = sqlite3.connect("quiz_scores.db")
     cursor = conn.cursor()
-    current_time = time.time() # Speed track karne ke liye
+    current_time = time.time()
     
     cursor.execute("SELECT points FROM scores WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
     data = cursor.fetchone()
@@ -211,26 +211,16 @@ async def moderate_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await warning.delete()
         except: pass
 
-# --- QUIZ LOGIC ---
-async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
+# --- CUSTOM QUIZ RUNNER (Replaces Job Queue) ---
+async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> bool:
     current_idx, subject = get_quiz_state(chat_id)
     questions = load_questions(subject)
     
     if not questions:
-        await context.bot.send_message(chat_id, f"⚠️ {SUBJECTS_FILES.get(subject)} file khali hai, format galat hai, ya mili nahi!")
-        current_jobs = context.job_queue.get_jobs_by_name(f"quiz_{chat_id}")
-        for job in current_jobs: job.schedule_removal()
-        return
+        await context.bot.send_message(chat_id, f"⚠️ {SUBJECTS_FILES.get(subject)} file khali hai ya nahi mili!")
+        return False
 
-    # Jab saare sawal khatam ho jayein toh leaderboard dikhao aur quiz stop kardo
     if current_idx >= len(questions):
-        current_jobs = context.job_queue.get_jobs_by_name(f"quiz_{chat_id}")
-        for job in current_jobs: job.schedule_removal()
-        
-        stop_jobs = context.job_queue.get_jobs_by_name(f"stop_{chat_id}")
-        for job in stop_jobs: job.schedule_removal()
-        
         top_users = get_top_scorers(chat_id)
         msg = "🏁 ALL QUESTIONS COMPLETED! 🏁\n\n🏅 Final Leaderboard:\n"
         if top_users:
@@ -239,7 +229,7 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE):
         else:
             msg += "Kisi ne sahi jawab nahi diya."
         await context.bot.send_message(chat_id, msg)
-        return
+        return False
     
     question_data = questions[current_idx]
     
@@ -259,12 +249,46 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE):
         )
         ACTIVE_POLLS[message.poll.id] = {'correct': question_data['correct'], 'chat_id': chat_id}
         update_quiz_state(chat_id, current_idx + 1, subject)
+        return True
         
     except Exception as e:
         logger.error(f"Quiz Error in Chat {chat_id}: {e}")
-        await context.bot.send_message(chat_id, f"⚠️ Question bhejne mein dikkat aayi (Error: {e}). \nKripya apne .txt file ka format check karein (Poll option 100 character se chota hona chahiye).")
-        current_jobs = context.job_queue.get_jobs_by_name(f"quiz_{chat_id}")
-        for job in current_jobs: job.schedule_removal()
+        await context.bot.send_message(chat_id, f"⚠️ Question bhejne mein dikkat aayi (Error: {e}). \nPoll option 100 character se chota hona chahiye.")
+        return False
+
+async def quiz_runner_task(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    await asyncio.sleep(2) # Initial delay before first question
+    try:
+        # Loop for maximum 60 questions (10 minutes approx)
+        for _ in range(60):
+            if chat_id not in QUIZ_TASKS:
+                break # Manually stopped
+                
+            is_running = await send_sequential_quiz(context, chat_id)
+            if not is_running:
+                break # Out of questions or error
+                
+            await asyncio.sleep(10) # 10 seconds interval between questions
+    except asyncio.CancelledError:
+        pass
+    finally:
+        # Jab loop natural tarike se khatam ho toh auto-stop bulao
+        if chat_id in QUIZ_TASKS:
+            await stop_competition_auto(context, chat_id)
+
+async def stop_competition_auto(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    if chat_id in QUIZ_TASKS:
+        del QUIZ_TASKS[chat_id]
+    
+    top_users = get_top_scorers(chat_id)
+    msg = "🏁 COMPETITION OVER! (Time Up) 🏁\n\n🏅 Final Leaderboard:\n"
+    if top_users:
+        for idx, (name, points) in enumerate(top_users, 1):
+            msg += f"{idx}. {name} -> {points} Marks\n"
+    else:
+        msg += "Kisi ne sahi jawab nahi diya."
+    await context.bot.send_message(chat_id, msg)
+
 
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = update.poll_answer
@@ -280,20 +304,6 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         if selected_option == correct_option:
             add_points(chat_id, user_id, user_name, 2)
-
-async def stop_competition_auto(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
-    current_jobs = context.job_queue.get_jobs_by_name(f"quiz_{chat_id}")
-    for job in current_jobs: job.schedule_removal()
-    
-    top_users = get_top_scorers(chat_id)
-    msg = "🏁 COMPETITION OVER! (Time Up) 🏁\n\n🏅 Final Leaderboard:\n"
-    if top_users:
-        for idx, (name, points) in enumerate(top_users, 1):
-            msg += f"{idx}. {name} -> {points} Marks\n"
-    else:
-        msg += "Kisi ne sahi jawab nahi diya."
-    await context.bot.send_message(chat_id, msg)
 
 # --- COMMANDS ---
 async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -317,7 +327,7 @@ async def show_quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = update.effective_chat.id
-    if context.job_queue.get_jobs_by_name(f"quiz_{chat_id}"):
+    if chat_id in QUIZ_TASKS:
         await update.message.reply_text("⚠️ Is chat mein competition pehle se chal raha hai! Pehle /stop karein.")
         return
 
@@ -357,17 +367,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("start_"):
         subject = data.split("_")[1]
         
-        # JAISE HI NAYA QUIZ START HOGA, PURANE SCORES DELETE HO JAYENGE
         reset_scores(chat_id)
-        
         current_idx, _ = get_quiz_state(chat_id)
         update_quiz_state(chat_id, current_idx, subject)
         
         await query.edit_message_text(f"🚀 {subject.capitalize()} COMPETITION START! 🚀\n⏱️ Duration: 10 Minutes\n⚡ Har 10 Second me Naya Sawal\n\nTaiyar ho jao! 🏁")
         
-        # Scheduling the Quiz
-        context.job_queue.run_repeating(send_sequential_quiz, interval=10, first=2, chat_id=chat_id, name=f"quiz_{chat_id}")
-        context.job_queue.run_once(stop_competition_auto, when=600, chat_id=chat_id, name=f"stop_{chat_id}")
+        # Naya Custom Quiz Task Start Karo
+        if chat_id in QUIZ_TASKS:
+            QUIZ_TASKS[chat_id].cancel()
+            
+        task = asyncio.create_task(quiz_runner_task(chat_id, context))
+        QUIZ_TASKS[chat_id] = task
 
 async def reset_question_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update, context):
@@ -382,11 +393,14 @@ async def stop_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 Group mein sirf Admins rok sakte hain.")
         return
     chat_id = update.effective_chat.id
-    jobs = context.job_queue.get_jobs_by_name(f"quiz_{chat_id}")
-    if not jobs:
+    
+    if chat_id not in QUIZ_TASKS:
         await update.message.reply_text("⚠️ Abhi koi quiz nahi chal raha.")
         return
-    for job in jobs: job.schedule_removal()
+        
+    # Cancel the running task
+    QUIZ_TASKS[chat_id].cancel()
+    del QUIZ_TASKS[chat_id]
     
     top_users = get_top_scorers(chat_id)
     msg = "🛑 Competition manually rok diya gaya.\n\n🏅 Current Leaderboard:\n"
@@ -410,16 +424,10 @@ async def setup_commands(application: Application):
 
 # --- MAIN RUNNER ---
 def main():
-    # Render ke liye Dummy Web Server ko ek alag background thread me start karein
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
-    # --- PYTHON 3.14 ASYNCIO FIX ---
-    # Set a new event loop for the main thread to completely prevent RuntimeError
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
     init_db()
-    logger.info("Bot Live! With Dummy Web Server for Render.")
+    logger.info("Bot Live! With Custom Async Task Manager.")
     
     for sub, file in SUBJECTS_FILES.items():
         if not os.path.exists(file): logger.warning(f"⚠️ Warning: '{file}' nahi mili!")
@@ -438,11 +446,8 @@ def main():
 
     logger.info("✅ Bot is now polling messages...")
     
-    try:
-        # Run polling normally, which will automatically drop pending updates gracefully
-        app.run_polling(drop_pending_updates=True)
-    except Exception as e:
-        logger.error(f"Fatal Error: {e}")
+    # Direct safe polling start
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
