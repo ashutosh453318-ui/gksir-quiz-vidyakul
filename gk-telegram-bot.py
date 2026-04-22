@@ -291,11 +291,9 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
         await context.bot.send_message(chat_id, f"⚠️ '{SUBJECTS_FILES.get(subject)}' file khali hai ya galat format mein hai!")
         return False
 
-    # AUTO-RESET SYSTEM: Agar questions khatam ho gaye, toh auto reset karke wapas Q1 se shuru karega
+    # Agar questions khatam ho gaye toh FALSE return karo
     if current_idx >= len(questions):
-        current_idx = 0
-        update_quiz_state(chat_id, 0, subject)
-        await context.bot.send_message(chat_id, "🔄 Saare questions khatam ho gaye! Auto-resetting to Question 1...")
+        return False
     
     question_data = questions[current_idx]
     
@@ -337,23 +335,23 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
 
 async def quiz_runner_task(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.sleep(2) # Initial delay before first question
-    reason = "Time Up"
+    reason = "10 Questions Completed! Type /more for next."
     try:
-        # Loop for maximum 60 questions
-        for _ in range(60):
+        # Har baar sirf 10 questions poochega
+        for _ in range(10):
             if chat_id not in QUIZ_TASKS:
                 return # User used /stop (manually handled)
                 
             is_running = await send_sequential_quiz(context, chat_id)
             if not is_running:
-                reason = "All Questions Completed"
+                reason = "All Questions Completed!"
                 break
                 
             await asyncio.sleep(10) # 10 seconds interval between questions
     except asyncio.CancelledError:
         return # Task Cancelled
     
-    # Ye block tabhi chalega jab competition natural tareeke se khatam ho
+    # Ye block tabhi chalega jab 10 questions poore ho jayenge
     if chat_id in QUIZ_TASKS:
         _, subject = get_quiz_state(chat_id)
         msg = generate_leaderboard_msg(chat_id, subject, reason)
@@ -444,13 +442,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         reset_scores(chat_id)
         
-        # FIX: Hamesha question index 0 se start hoga jab bhi naya quiz shuru hoga
+        # Hamesha question index 0 se start hoga jab bhi naya quiz shuru hoga
         update_quiz_state(chat_id, 0, subject)
         
         # Competition naye sire se shuru, Stats Zero kardo
         COMPETITION_STATS[chat_id] = {'total_asked': 0}
         
-        await query.edit_message_text(f"🚀 {subject.capitalize()} COMPETITION START! 🚀\n⏱️ Duration: 10 Minutes\n⚡ Har 10 Second me Naya Sawal\n\nTaiyar ho jao! 🏁")
+        await query.edit_message_text(f"🚀 {subject.capitalize()} COMPETITION START! 🚀\n⚡ 10 Questions ka round\n⚡ Har 10 Second me Naya Sawal\n\nTaiyar ho jao! 🏁")
         
         if chat_id in QUIZ_TASKS:
             QUIZ_TASKS[chat_id].cancel()
@@ -485,7 +483,7 @@ async def more_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in COMPETITION_STATS:
         COMPETITION_STATS[chat_id] = {'total_asked': 0}
         
-    await update.message.reply_text(f"▶️ Quiz Resume ho raha hai! Subject: {subject.capitalize()}\n⚡ Bina score reset kiye aage ke sawal aayenge!")
+    await update.message.reply_text(f"▶️ Quiz Resume ho raha hai! Subject: {subject.capitalize()}\n⚡ Agle 10 sawal aa rahe hain!")
     
     task = asyncio.create_task(quiz_runner_task(chat_id, context))
     QUIZ_TASKS[chat_id] = task
@@ -513,7 +511,7 @@ async def setup_commands(application: Application):
             BotCommand("start", "Welcome message dekhein"),
             BotCommand("startcomp", "Quiz competition start karein"),
             BotCommand("stop", "Current quiz ko stop karein"),
-            BotCommand("more", "Bina score reset kiye quiz aage badhayein"),
+            BotCommand("more", "Agle 10 questions mangwayein"),
             BotCommand("resetq", "Question sequence reset karein")
         ]
         await application.bot.set_my_commands(commands)
