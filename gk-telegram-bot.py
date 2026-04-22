@@ -65,9 +65,13 @@ def run_dummy_server():
     except Exception as e:
         logger.error(f"Dummy Server Error: {e}")
 
-# --- DATABASE SETUP ---
+# --- DATABASE SETUP (With Timeout Fix for Concurrency) ---
+def get_db_connection():
+    # Timeout 10 seconds add kiya gaya hai taaki Database Lock hone par bot freeze na ho
+    return sqlite3.connect("quiz_scores.db", timeout=10)
+
 def init_db():
-    conn = sqlite3.connect("quiz_scores.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS scores (
@@ -103,7 +107,7 @@ def init_db():
     conn.close()
 
 def get_quiz_state(chat_id):
-    conn = sqlite3.connect("quiz_scores.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT current_index, subject FROM quiz_state WHERE chat_id = ?", (chat_id,))
     result = cursor.fetchone()
@@ -112,7 +116,7 @@ def get_quiz_state(chat_id):
     return 0, 'gk'
 
 def update_quiz_state(chat_id, new_index, subject=None):
-    conn = sqlite3.connect("quiz_scores.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     if subject is None:
         _, subject = get_quiz_state(chat_id)
@@ -125,7 +129,7 @@ def update_quiz_state(chat_id, new_index, subject=None):
     conn.close()
 
 def reset_scores(chat_id):
-    conn = sqlite3.connect("quiz_scores.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM scores WHERE chat_id = ?", (chat_id,))
     conn.commit()
@@ -133,7 +137,7 @@ def reset_scores(chat_id):
 
 def record_answer(chat_id, user_id, full_name, is_correct, duration):
     """User ka answer aur duration record karta hai"""
-    conn = sqlite3.connect("quiz_scores.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     current_time = time.time()
     
@@ -163,7 +167,7 @@ def record_answer(chat_id, user_id, full_name, is_correct, duration):
     conn.close()
 
 def get_top_scorers(chat_id):
-    conn = sqlite3.connect("quiz_scores.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     # Order by points descending, uske baad total duration ascending (kam time wala upar)
     cursor.execute("SELECT full_name, points, correct_answers, wrong_answers, total_duration FROM scores WHERE chat_id = ? ORDER BY points DESC, total_duration ASC LIMIT 10", (chat_id,))
@@ -287,9 +291,11 @@ async def send_sequential_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
         await context.bot.send_message(chat_id, f"⚠️ '{SUBJECTS_FILES.get(subject)}' file khali hai ya galat format mein hai!")
         return False
 
-    # Agar questions khatam ho gaye toh FALSE return karo (Leaderboard yahan print nahi hoga)
+    # AUTO-RESET SYSTEM: Agar questions khatam ho gaye, toh auto reset karke wapas Q1 se shuru karega
     if current_idx >= len(questions):
-        return False
+        current_idx = 0
+        update_quiz_state(chat_id, 0, subject)
+        await context.bot.send_message(chat_id, "🔄 Saare questions khatam ho gaye! Auto-resetting to Question 1...")
     
     question_data = questions[current_idx]
     
@@ -437,8 +443,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subject = data.split("_")[1]
         
         reset_scores(chat_id)
-        current_idx, _ = get_quiz_state(chat_id)
-        update_quiz_state(chat_id, current_idx, subject)
+        
+        # FIX: Hamesha question index 0 se start hoga jab bhi naya quiz shuru hoga
+        update_quiz_state(chat_id, 0, subject)
         
         # Competition naye sire se shuru, Stats Zero kardo
         COMPETITION_STATS[chat_id] = {'total_asked': 0}
@@ -458,6 +465,30 @@ async def reset_question_number(update: Update, context: ContextTypes.DEFAULT_TY
     chat_id = update.effective_chat.id
     update_quiz_state(chat_id, 0)
     await update.message.reply_text("✅ Sequence reset to Question 1.")
+
+async def more_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_authorized(update, context):
+        await update.message.reply_text("🚫 Group mein sirf Admins rok sakte hain.")
+        return
+    chat_id = update.effective_chat.id
+    
+    if chat_id in QUIZ_TASKS:
+        await update.message.reply_text("⚠️ Quiz pehle se chal raha hai!")
+        return
+        
+    current_idx, subject = get_quiz_state(chat_id)
+    if not subject:
+        await update.message.reply_text("⚠️ Pehle /startcomp use karke koi subject select karein!")
+        return
+        
+    # Stats track karne ke liye, taaki purana leaderboard merge ho jaye
+    if chat_id not in COMPETITION_STATS:
+        COMPETITION_STATS[chat_id] = {'total_asked': 0}
+        
+    await update.message.reply_text(f"▶️ Quiz Resume ho raha hai! Subject: {subject.capitalize()}\n⚡ Bina score reset kiye aage ke sawal aayenge!")
+    
+    task = asyncio.create_task(quiz_runner_task(chat_id, context))
+    QUIZ_TASKS[chat_id] = task
 
 async def stop_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update, context):
@@ -482,6 +513,7 @@ async def setup_commands(application: Application):
             BotCommand("start", "Welcome message dekhein"),
             BotCommand("startcomp", "Quiz competition start karein"),
             BotCommand("stop", "Current quiz ko stop karein"),
+            BotCommand("more", "Bina score reset kiye quiz aage badhayein"),
             BotCommand("resetq", "Question sequence reset karein")
         ]
         await application.bot.set_my_commands(commands)
@@ -503,6 +535,7 @@ def main():
     app.add_handler(CommandHandler("start", start_bot))
     app.add_handler(CommandHandler("startcomp", show_quiz_menu)) 
     app.add_handler(CommandHandler("stop", stop_now))
+    app.add_handler(CommandHandler("more", more_quiz))
     app.add_handler(CommandHandler("resetq", reset_question_number))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, moderate_messages))
