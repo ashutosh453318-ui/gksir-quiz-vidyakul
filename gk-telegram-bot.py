@@ -41,7 +41,8 @@ QUIZ_STRUCTURE = {
         "Chapter 1": "physics_chapter1.txt"
     },
     "chemistry": {
-        "Solution": "chemistry_chapter1.txt"
+        "Solution": "chemistry_chapter1.txt",
+        "test":"test.txt"
     }
 }
 
